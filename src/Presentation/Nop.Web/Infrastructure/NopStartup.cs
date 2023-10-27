@@ -81,7 +81,7 @@ namespace Nop.Web.Infrastructure
             services.AddScoped<ITopicModelFactory, TopicModelFactory>();
             services.AddScoped<IVendorAttributeModelFactory, VendorAttributeModelFactory>();
             services.AddScoped<IVendorModelFactory, VendorModelFactory>();
-            services.AddScoped<IWidgetModelFactory, WidgetModelFactory>();
+            services.AddScoped<Areas.Admin.Factories.IWidgetModelFactory, Areas.Admin.Factories.WidgetModelFactory>();
 
             //factories
             services.AddScoped<Factories.IAddressModelFactory, Factories.AddressModelFactory>();
@@ -93,6 +93,7 @@ namespace Nop.Web.Infrastructure
             services.AddScoped<Factories.ICustomerModelFactory, Factories.CustomerModelFactory>();
             services.AddScoped<Factories.IForumModelFactory, Factories.ForumModelFactory>();
             services.AddScoped<Factories.IExternalAuthenticationModelFactory, Factories.ExternalAuthenticationModelFactory>();
+            services.AddScoped<Factories.IJsonLdModelFactory, Factories.JsonLdModelFactory>();
             services.AddScoped<Factories.INewsModelFactory, Factories.NewsModelFactory>();
             services.AddScoped<Factories.INewsletterModelFactory, Factories.NewsletterModelFactory>();
             services.AddScoped<Factories.IOrderModelFactory, Factories.OrderModelFactory>();
@@ -105,7 +106,6 @@ namespace Nop.Web.Infrastructure
             services.AddScoped<Factories.ISitemapModelFactory, Factories.SitemapModelFactory>();
             services.AddScoped<Factories.ITopicModelFactory, Factories.TopicModelFactory>();
             services.AddScoped<Factories.IVendorModelFactory, Factories.VendorModelFactory>();
-            services.AddScoped<Factories.IWidgetModelFactory, Factories.WidgetModelFactory>();
 
             //helpers classes
             services.AddScoped<ITinyMceHelper, TinyMceHelper>();

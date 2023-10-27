@@ -784,7 +784,7 @@ namespace Nop.Services.Orders
             order.RedeemedRewardPointsEntryId = await _rewardPointService.AddRewardPointsHistoryEntryAsync(details.Customer, -details.RedeemedRewardPoints, order.StoreId,
                 string.Format(await _localizationService.GetResourceAsync("RewardPoints.Message.RedeemedForOrder", order.CustomerLanguageId), order.CustomOrderNumber),
                 order, details.RedeemedRewardPointsAmount);
-            await _customerService.UpdateCustomerAsync(details.Customer);
+
             await _orderService.UpdateOrderAsync(order);
 
             return order;
@@ -1142,12 +1142,8 @@ namespace Nop.Services.Orders
                 //bundled (associated) products
                 var attributeValues = await _productAttributeParser.ParseProductAttributeValuesAsync(orderItem.AttributesXml);
                 foreach (var attributeValue in attributeValues)
-                {
                     if (attributeValue.AttributeValueType == AttributeValueType.AssociatedToProduct)
-                    {
                         purchasedProductIds.Add(attributeValue.AssociatedProductId);
-                    }
-                }
             }
 
             //list of customer roles
@@ -1162,28 +1158,20 @@ namespace Nop.Services.Orders
             var customer = await _customerService.GetCustomerByIdAsync(order.CustomerId);
 
             foreach (var customerRole in customerRoles)
-            {
                 if (!await _customerService.IsInCustomerRoleAsync(customer, customerRole.SystemName))
                 {
                     //not in the list yet
                     if (add)
-                    {
                         //add
                         await _customerService.AddCustomerRoleMappingAsync(new CustomerCustomerRoleMapping { CustomerId = customer.Id, CustomerRoleId = customerRole.Id });
-                    }
                 }
                 else
                 {
                     //already in the list
                     if (!add)
-                    {
                         //remove
                         await _customerService.RemoveCustomerRoleMappingAsync(customer, customerRole);
-                    }
                 }
-            }
-
-            await _customerService.UpdateCustomerAsync(customer);
         }
 
         /// <summary>
@@ -1307,8 +1295,7 @@ namespace Nop.Services.Orders
                     string.Format(await _localizationService.GetResourceAsync("Admin.StockQuantityHistory.Messages.PlaceOrder"), order.Id));
             }
 
-            //clear shopping cart
-            await Task.WhenAll(details.Cart.ToList().Select(sci => _shoppingCartService.DeleteShoppingCartItemAsync(sci, false)));
+            await _shoppingCartService.ClearShoppingCartAsync(details.Customer, order.StoreId);
         }
 
         /// <summary>
@@ -1441,6 +1428,76 @@ namespace Nop.Services.Orders
             }
         }
 
+        /// <summary>
+        /// Checks and save order status
+        /// </summary>
+        /// <param name="order">Order</param>
+        /// <param name="needOrderSave">Indicate if we need save order if nothing changed on the order status</param>
+        /// <returns>A task that represents the asynchronous operation</returns>
+        protected virtual async Task CheckAndSaveOrderStatusAsync(Order order, bool needOrderSave)
+        {
+            if (order == null)
+                throw new ArgumentNullException(nameof(order));
+
+            var completed = false;
+            var isOrderSaved = !needOrderSave;
+
+            if (order.PaymentStatus == PaymentStatus.Paid)
+            {
+                if (!order.PaidDateUtc.HasValue)
+                {
+                    //ensure that paid date is set
+                    order.PaidDateUtc = DateTime.UtcNow;
+                    isOrderSaved = false;
+                }
+
+                if (order.ShippingStatus == ShippingStatus.ShippingNotRequired)
+                    //shipping is not required
+                    completed = true;
+                else
+                    //shipping is required
+                    completed = _orderSettings.CompleteOrderWhenDelivered
+                        ? order.ShippingStatus == ShippingStatus.Delivered
+                        : order.ShippingStatus == ShippingStatus.Shipped || order.ShippingStatus == ShippingStatus.Delivered;
+            }
+
+            switch (order.OrderStatus)
+            {
+                case OrderStatus.Pending:
+                    if (order.PaymentStatus == PaymentStatus.Authorized ||
+                        order.PaymentStatus == PaymentStatus.Paid)
+                    {
+                        await SetOrderStatusAsync(order, OrderStatus.Processing, !completed);
+                        isOrderSaved = true;
+                    }
+
+                    if (order.ShippingStatus == ShippingStatus.PartiallyShipped ||
+                        order.ShippingStatus == ShippingStatus.Shipped ||
+                        order.ShippingStatus == ShippingStatus.Delivered)
+                    {
+                        await SetOrderStatusAsync(order, OrderStatus.Processing, !completed);
+                        isOrderSaved = true;
+                    }
+
+                    break;
+                //is order complete?
+                case OrderStatus.Cancelled:
+                case OrderStatus.Complete:
+                    if (!isOrderSaved)
+                        await _orderService.UpdateOrderAsync(order);
+                    return;
+            }
+
+            if (completed)
+            {
+                await SetOrderStatusAsync(order, OrderStatus.Complete, true);
+                isOrderSaved = true;
+            }
+
+            if (!isOrderSaved)
+                await _orderService.UpdateOrderAsync(order);
+        }
+
         #endregion
 
         #region Methods
@@ -1452,55 +1509,7 @@ namespace Nop.Services.Orders
         /// <returns>A task that represents the asynchronous operation</returns>
         public virtual async Task CheckOrderStatusAsync(Order order)
         {
-            if (order == null)
-                throw new ArgumentNullException(nameof(order));
-
-            var completed = false;
-            if (order.PaymentStatus == PaymentStatus.Paid)
-            {
-                if (!order.PaidDateUtc.HasValue)
-                {
-                    //ensure that paid date is set
-                    order.PaidDateUtc = DateTime.UtcNow;
-                    await _orderService.UpdateOrderAsync(order);
-                }
-
-                if (order.ShippingStatus == ShippingStatus.ShippingNotRequired)
-                {
-                    //shipping is not required
-                    completed = true;
-                }
-                else
-                {
-                    //shipping is required
-                    if (_orderSettings.CompleteOrderWhenDelivered)
-                        completed = order.ShippingStatus == ShippingStatus.Delivered;
-                    else
-                        completed = order.ShippingStatus == ShippingStatus.Shipped || order.ShippingStatus == ShippingStatus.Delivered;
-                }
-            }
-
-            switch (order.OrderStatus)
-            {
-                case OrderStatus.Pending:
-                    if (order.PaymentStatus == PaymentStatus.Authorized ||
-                        order.PaymentStatus == PaymentStatus.Paid)
-                        await SetOrderStatusAsync(order, OrderStatus.Processing, !completed);
-
-                    if (order.ShippingStatus == ShippingStatus.PartiallyShipped ||
-                        order.ShippingStatus == ShippingStatus.Shipped ||
-                        order.ShippingStatus == ShippingStatus.Delivered)
-                        await SetOrderStatusAsync(order, OrderStatus.Processing, !completed);
-
-                    break;
-                //is order complete?
-                case OrderStatus.Cancelled:
-                case OrderStatus.Complete:
-                    return;
-            }
-
-            if (completed)
-                await SetOrderStatusAsync(order, OrderStatus.Complete, true);
+            await CheckAndSaveOrderStatusAsync(order, false);
         }
 
         /// <summary>
@@ -1654,7 +1663,7 @@ namespace Nop.Services.Orders
                 updatedOrder.ShippingRateComputationMethodSystemName = updateOrderParameters.PickupPoint.ProviderSystemName;
             }
 
-            await _orderService.UpdateOrderAsync(updatedOrder);
+            await CheckAndSaveOrderStatusAsync(updatedOrder, true);
 
             //discount usage history
             var discountUsageHistoryForOrder = await _discountService.GetAllDiscountUsageHistoryAsync(null, customer.Id, updatedOrder.Id);
@@ -1665,17 +1674,13 @@ namespace Nop.Services.Orders
 
                 var d = await _discountService.GetDiscountByIdAsync(discount.Id);
                 if (d != null)
-                {
                     await _discountService.InsertDiscountUsageHistoryAsync(new DiscountUsageHistory
                     {
                         DiscountId = d.Id,
                         OrderId = updatedOrder.Id,
                         CreatedOnUtc = DateTime.UtcNow
                     });
-                }
             }
-
-            await CheckOrderStatusAsync(updatedOrder);
 
             async Task<(List<ShoppingCartItem> restoredCart, ShoppingCartItem updatedShoppingCartItem)> restoreShoppingCartAsync(Order order, int updatedOrderItemId)
             {
@@ -3135,7 +3140,7 @@ namespace Nop.Services.Orders
         /// <param name="useRewardPoints">A value indicating reward points should be used; null to detect current choice of the customer</param>
         /// <returns>
         /// A task that represents the asynchronous operation
-        /// The task result contains the rue - OK; false - minimum order total amount is not reached
+        /// The task result contains the value indicating whether payment workflow is required
         /// </returns>
         public virtual async Task<bool> IsPaymentWorkflowRequiredAsync(IList<ShoppingCartItem> cart, bool? useRewardPoints = null)
         {
@@ -3145,9 +3150,11 @@ namespace Nop.Services.Orders
             var result = true;
 
             //check whether order total equals zero
-            var shoppingCartTotalBase = (await _orderTotalCalculationService.GetShoppingCartTotalAsync(cart, useRewardPoints: useRewardPoints)).shoppingCartTotal;
-            if (shoppingCartTotalBase.HasValue && shoppingCartTotalBase.Value == decimal.Zero)
+            var shoppingCartTotalBase = (await _orderTotalCalculationService.GetShoppingCartTotalAsync(cart, useRewardPoints: useRewardPoints, usePaymentMethodAdditionalFee: false)).shoppingCartTotal;
+
+            if (shoppingCartTotalBase is decimal.Zero)
                 result = false;
+
             return result;
         }
 
